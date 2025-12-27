@@ -244,35 +244,101 @@ def main():
                     except Exception as e:
                         logger.warning(f"Could not restore optimizer state: {e}")
 
-                # restore RNGs (best-effort)
+                # -------------------------
+                # Replace this block in your resume-from code
+                # -------------------------
+                def coerce_to_byte_tensor(x):
+                    """
+                    Convert x to a 1-D torch.uint8 CPU tensor suitable for torch.set_rng_state()
+                    or torch.cuda.set_rng_state_all(). Accepts: torch.Tensor, numpy arrays,
+                    lists/tuples, bytes/bytearray. Raises ValueError on unsupported types.
+                    """
+                    # already a tensor
+                    if torch.is_tensor(x):
+                        # if dtype already uint8, just ensure on CPU
+                        if x.dtype == torch.uint8:
+                            return x.cpu()
+                        # sometimes dtype may be uint8 but different alias; coerce anyway
+                        return x.to(dtype=torch.uint8).cpu()
+                
+                    # bytes / bytearray -> sequence of ints
+                    if isinstance(x, (bytes, bytearray)):
+                        return torch.tensor(list(x), dtype=torch.uint8, device='cpu')
+                
+                    # numpy arrays
+                    try:
+                        import numpy as _np
+                        if isinstance(x, _np.ndarray):
+                            # ensure view as uint8 then convert to cpu tensor
+                            return torch.tensor(x.astype(_np.uint8).reshape(-1), dtype=torch.uint8, device='cpu')
+                    except Exception:
+                        pass
+                
+                    # lists/tuples -> flatten to uint8
+                    if isinstance(x, (list, tuple)):
+                        try:
+                            # flatten nested containers into 1-D uint8 array
+                            flat = np.asarray(x, dtype=np.uint8).reshape(-1)
+                            return torch.tensor(flat, dtype=torch.uint8, device='cpu')
+                        except Exception:
+                            raise ValueError(f"Unable to coerce list/tuple RNG object to uint8 tensor (len={len(x)})")
+                
+                    # last attempt: try to directly make a tensor
+                    try:
+                        return torch.tensor(x, dtype=torch.uint8, device='cpu')
+                    except Exception:
+                        raise ValueError(f"Cannot coerce object of type {type(x)} to torch.uint8 tensor")
+                
+                # Now the actual restore logic (replace your existing RNG restore block)
                 try:
                     if 'rng_numpy' in ckpt:
-                        np.random.set_state(ckpt['rng_numpy'])
+                        try:
+                            np.random.set_state(ckpt['rng_numpy'])
+                            logger.info("Restored numpy RNG state.")
+                        except Exception as e:
+                            logger.warning(f"Failed to restore numpy RNG state: {e}")
+                
                     if 'rng_python' in ckpt:
-                        pyrandom.setstate(ckpt['rng_python'])
+                        try:
+                            pyrandom.setstate(ckpt['rng_python'])
+                            logger.info("Restored python random RNG state.")
+                        except Exception as e:
+                            logger.warning(f"Failed to restore python RNG state: {e}")
+                
                     if 'rng_torch' in ckpt:
-                        rt = ckpt['rng_torch']
-                        # handle tensor / numpy array or list
-                        if isinstance(rt, torch.Tensor):
-                            torch.set_rng_state(rt)
-                        else:
-                            try:
-                                torch.set_rng_state(torch.tensor(rt, dtype=torch.uint8))
-                            except Exception:
-                                logger.warning("Could not restore CPU RNG from checkpoint (type mismatch).")
+                        try:
+                            rt = ckpt['rng_torch']
+                            rt_bt = coerce_to_byte_tensor(rt)
+                            # torch.set_rng_state expects the CPU uint8 tensor returned by torch.get_rng_state()
+                            torch.set_rng_state(rt_bt)
+                            logger.info("Restored CPU torch RNG state.")
+                        except Exception as e:
+                            logger.warning(f"Could not restore CPU torch RNG from checkpoint: {e}")
+                
                     if torch.cuda.is_available() and 'rng_cuda_all' in ckpt:
                         try:
                             cuda_states = []
-                            for s in ckpt['rng_cuda_all']:
-                                if isinstance(s, torch.Tensor):
-                                    cuda_states.append(s)
-                                else:
-                                    cuda_states.append(torch.tensor(s, dtype=torch.uint8))
-                            torch.cuda.set_rng_state_all(cuda_states)
-                        except Exception:
-                            logger.warning("Could not restore CUDA RNG states from checkpoint.")
+                            saved = ckpt['rng_cuda_all']
+                            # support either list/tuple or single entry
+                            if not isinstance(saved, (list, tuple)):
+                                saved = [saved]
+                            for i, s in enumerate(saved):
+                                try:
+                                    bt = coerce_to_byte_tensor(s)
+                                    cuda_states.append(bt)
+                                except Exception as e:
+                                    logger.warning(f"Could not coerce CUDA RNG entry #{i}: {e}")
+                            if len(cuda_states) > 0:
+                                # torch.cuda.set_rng_state_all expects a list of uint8 CPU tensors
+                                torch.cuda.set_rng_state_all(cuda_states)
+                                logger.info(f"Restored {len(cuda_states)} CUDA RNG state(s).")
+                            else:
+                                logger.warning("No valid CUDA RNG states found in checkpoint to restore.")
+                        except Exception as e:
+                            logger.warning(f"Could not restore CUDA RNG states from checkpoint: {e}")
                 except Exception as e:
                     logger.warning(f"RNG restore failed: {e}")
+
 
                 # restore bookkeeping
                 start_epoch = int(ckpt.get('epoch', 0)) + 1
