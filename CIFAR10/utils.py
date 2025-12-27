@@ -180,11 +180,16 @@ def evaluate_pgd(test_loader, model, attack_iters, restarts):
     eps_tensor = (torch.tensor(eps, dtype=torch.float32) / std).to(device=model_device)
     alpha_tensor = (torch.tensor(a, dtype=torch.float32) / std).to(device=model_device)
 
-    with torch.no_grad():
-        for X, y in test_loader:
-            X = X.to(model_device)
-            y = y.to(model_device)
-            pgd_delta = attack_pgd(model, X, y, eps_tensor, alpha_tensor, attack_iters, restarts)
+    for X, y in test_loader:
+        # move batch to model device
+        X = X.to(model_device)
+        y = y.to(model_device)
+
+        # compute adversarial perturbation (requires grad)
+        pgd_delta = attack_pgd(model, X, y, eps_tensor, alpha_tensor, attack_iters, restarts)
+
+        # now evaluate robustly without gradients
+        with torch.no_grad():
             output = model(normalize(torch.clamp(X + pgd_delta, min=lower_limit.to(model_device), max=upper_limit.to(model_device))))
             loss = F.cross_entropy(output, y)
             pgd_loss += loss.item() * y.size(0)
