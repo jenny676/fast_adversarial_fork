@@ -108,6 +108,8 @@ def get_args():
     parser.add_argument('--lr-max', default=0.2, type=float)
     parser.add_argument('--weight-decay', default=5e-4, type=float)
     parser.add_argument('--momentum', default=0.9, type=float)
+    parser.add_argument('--resume-from', default='', type=str,
+                    help='Path to checkpoint to resume from')
 
     # adversarial params
     parser.add_argument('--epsilon', default=8, type=int, help='epsilon in pixel space (0-255)')
