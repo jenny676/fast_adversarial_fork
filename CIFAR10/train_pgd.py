@@ -394,26 +394,31 @@ def main():
                              epoch=epoch, batch_idx=0,
                              best_test=-1.0, train_subset_indices=train_subset_indices, logger=logger)
 
+        # -------------------------
         # Evaluation (test with stronger PGD)
+        # -------------------------
         model.eval()
         test_model = model
-
-        # evaluate robustly (evaluate_pgd signature now returns avg_loss, avg_acc, n)
-        with torch.no_grad():
-            if epoch % EVAL_EVERY == 0 or epoch == args.epochs - 1:
-                # full evaluation
-                iters_test = args.attack_iters_test
-            else:
-                # cheap evaluation
-                iters_test = QUICK_PGD_ITERS
-            
+        
+        # decide whether this epoch gets a full expensive eval
+        is_full_eval = (epoch % EVAL_EVERY == 0) or (epoch == args.epochs - 1)
+        iters_test = args.attack_iters_test if is_full_eval else QUICK_PGD_ITERS
+        
+        # start timing for test portion
+        test_start_time = time.time()
+        
+        # run robust (PGD) eval with gradients enabled (PGD needs grads w.r.t. inputs)
+        with torch.enable_grad():
             pgd_loss, pgd_acc, pgd_n = evaluate_pgd(
                 test_loader, test_model, iters_test, args.restarts
             )
+        
+        # run clean evaluation without grads
+        with torch.no_grad():
             test_loss, test_acc, test_n = evaluate_standard(
                 test_loader, test_model
             )
-
+        
         # record which PGD was used this epoch (don't change existing metrics file)
         protocol_path = os.path.join(args.out_dir, 'eval_protocol.log')
         line = f"epoch={epoch}, mode={'FULL' if is_full_eval else 'QUICK'}, pgd_test_iters={iters_test}, pgd_restarts={args.restarts}, timestamp={time.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -424,12 +429,13 @@ def main():
         # append to protocol log (creates the file if it doesn't exist)
         with open(protocol_path, 'a') as pf:
             pf.write(line)
-
+        
         # compute times
-        train_end_time = time.time()
+        train_end_time = test_start_time
         test_time = time.time()
         wall_time_train = train_end_time - start_epoch_time
-        wall_time_epoch = test_time - train_end_time
+        wall_time_epoch = test_time - test_start_time
+
 
         # safe average helpers
         def safe_avg(val, n):
