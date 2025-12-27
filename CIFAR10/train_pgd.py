@@ -64,7 +64,7 @@ def save_full_checkpoint(path, model_state, opt_state, epoch=0, batch_idx=0,
         logger.info(f"Saved checkpoint: {path}")
 
 def safe_load_checkpoint(path, device='cpu'):
-    return torch.load(path, map_location=device)
+    return torch.load(path, map_location=device, weights_only=False)
 
 
 # -------------------------
