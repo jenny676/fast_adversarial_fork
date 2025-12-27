@@ -321,39 +321,33 @@ def main():
         model.eval()
         test_model = model
 
-        # evaluate robustly (evaluate_pgd signature: loader, model, iters, restarts)
+        # evaluate robustly (evaluate_pgd signature now returns avg_loss, avg_acc, n)
         iters_test = args.attack_iters_test
-        pgd_loss, pgd_acc = evaluate_pgd(test_loader, test_model, iters_test, args.restarts)
-        test_loss, test_acc = evaluate_standard(test_loader, test_model)
+        pgd_loss, pgd_acc, pgd_n = evaluate_pgd(test_loader, test_model, iters_test, args.restarts)
+        test_loss, test_acc, test_n = evaluate_standard(test_loader, test_model)
 
-        # record times
-        train_end_time = time.time()   # right after training finished
-        test_time = time.time()        # right after evaluation finished
+        # compute times
+        train_end_time = time.time()
+        test_time = time.time()
         wall_time_train = train_end_time - start_epoch_time
         wall_time_epoch = test_time - train_end_time
 
-        # === compute safe averages ===
-        def safe_avg(num, denom):
-            return float(num) / float(denom) if denom else None
+        # safe average helpers
+        def safe_avg(val, n):
+            return float(val) if (n and n > 0) else None
 
-        train_loss_avg = safe_avg(train_loss, train_n)
-        train_acc_avg = safe_avg(train_acc, train_n)
-        train_robust_loss_avg = safe_avg(train_robust_loss, train_n)
-        train_robust_acc_avg = safe_avg(train_robust_acc, train_n)
+        train_loss_avg = safe_avg(train_loss / train_n if train_n else None, train_n)
+        train_acc_avg = safe_avg(train_acc / train_n if train_n else None, train_n)
+        train_robust_loss_avg = safe_avg(train_robust_loss / train_n if train_n else None, train_n)
+        train_robust_acc_avg = safe_avg(train_robust_acc / train_n if train_n else None, train_n)
 
-        # test_n should be set inside evaluate_standard / evaluate_pgd logic; guard if missing
-        try:
-            test_n  # noqa: F821
-        except NameError:
-            # fallback: derive n from test_loader length * batch_size (approx) — prefer real values from eval funcs
-            test_n = None
+        # test averages already computed by eval funcs; guard if their n==0
+        test_loss_avg = test_loss if test_n else None
+        test_acc_avg = test_acc if test_n else None
+        test_robust_loss_avg = pgd_loss if pgd_n else None
+        test_robust_acc_avg = pgd_acc if pgd_n else None
 
-        test_loss_avg = safe_avg(test_loss, test_n) if test_n else (test_loss if test_n == 0 else None)
-        test_acc_avg = safe_avg(test_acc, test_n) if test_n else (test_acc if test_n == 0 else None)
-        test_robust_loss_avg = safe_avg(pgd_loss, test_n) if test_n else (pgd_loss if test_n == 0 else None)
-        test_robust_acc_avg = safe_avg(pgd_acc, test_n) if test_n else (pgd_acc if test_n == 0 else None)
-
-        # log a full, human-readable line
+        # log nicely
         logger.info(
             '%d \t %.1f \t %.1f \t %.6f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f',
             epoch,
@@ -370,7 +364,7 @@ def main():
             test_robust_acc_avg if test_robust_acc_avg is not None else float('nan'),
         )
 
-        # append metrics row in CSV in the requested order
+        # write CSV row
         def cell(x):
             return "" if x is None else f"{x:.6f}"
 
@@ -390,6 +384,7 @@ def main():
                 cell(test_robust_loss_avg),
                 cell(test_robust_acc_avg),
             ])
+
 
         model.train()
 
