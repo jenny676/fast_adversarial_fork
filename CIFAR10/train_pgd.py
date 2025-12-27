@@ -175,6 +175,9 @@ def main():
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.pgd_alpha / 255.) / std
 
+    epsilon = epsilon.to(device=device, dtype=torch.float32)
+    alpha = alpha.to(device=device, dtype=torch.float32)
+
     # build model
     model_name = args.model.lower()
     if model_name in ['preactresnet18', 'preact_resnet18', 'preactresnet']:
