@@ -20,14 +20,14 @@ lower_limit = ((0 - mu)/ std)
 def get_mu(device=None, dtype=None):
     """Return CIFAR mean on requested device/dtype (or cpu if None)."""
     if device is None and dtype is None:
-        return _cifar10_mean
-    return _cifar10_mean.to(device=device, dtype=dtype)
+        return cifar10_mean
+    return cifar10_mean.to(device=device, dtype=dtype)
 
 def get_std(device=None, dtype=None):
     """Return CIFAR std on requested device/dtype (or cpu if None)."""
     if device is None and dtype is None:
-        return _cifar10_std
-    return _cifar10_std.to(device=device, dtype=dtype)
+        return cifar10_std
+    return cifar10_std.to(device=device, dtype=dtype)
 
 def normalize(X):
     """
