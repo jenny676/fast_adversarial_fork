@@ -132,6 +132,8 @@ def get_args():
 
     return parser.parse_args()
 
+EVAL_EVERY = 5
+QUICK_PGD_ITERS = 3
 
 # -------------------------
 # main training
@@ -397,9 +399,20 @@ def main():
         test_model = model
 
         # evaluate robustly (evaluate_pgd signature now returns avg_loss, avg_acc, n)
-        iters_test = args.attack_iters_test
-        pgd_loss, pgd_acc, pgd_n = evaluate_pgd(test_loader, test_model, iters_test, args.restarts)
-        test_loss, test_acc, test_n = evaluate_standard(test_loader, test_model)
+        with torch.no_grad():
+            if epoch % EVAL_EVERY == 0 or epoch == args.epochs - 1:
+                # full evaluation
+                iters_test = args.attack_iters_test
+            else:
+                # cheap evaluation
+                iters_test = QUICK_PGD_ITERS
+            
+            pgd_loss, pgd_acc, pgd_n = evaluate_pgd(
+                test_loader, test_model, iters_test, args.restarts
+            )
+            test_loss, test_acc, test_n = evaluate_standard(
+                test_loader, test_model
+            )
 
         # compute times
         train_end_time = time.time()
