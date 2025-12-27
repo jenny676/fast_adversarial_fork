@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 try:
     import apex.amp as amp
-except ImportError:
+except Exception:
     amp = None
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
@@ -26,6 +26,10 @@ from utils import (upper_limit, lower_limit, std, clamp, get_loaders,
                    evaluate_pgd, evaluate_standard, normalize)
 
 logger = logging.getLogger(__name__)
+
+# helper: convert python scalar to tensor on the same device/dtype as ref_tensor
+def _scalar_on_device(scalar, ref_tensor):
+    return torch.tensor(scalar, dtype=ref_tensor.dtype, device=ref_tensor.device)
 
 # -------------------------
 # Atomic checkpoint helpers (save model+opt+rng+subset indices)
@@ -152,6 +156,9 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
     pyrandom.seed(args.seed)
 
+    # device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # loaders
     train_loader_full, test_loader = get_loaders(args.data_dir, args.batch_size)
     train_loader, train_subset_indices = build_train_loader_with_fraction(train_loader_full, args.train_fraction, args.seed, args.batch_size)
@@ -173,8 +180,7 @@ def main():
         logger.warning("Unknown model %s; defaulting to PreActResNet18", args.model)
         model = PreActResNet18()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # wrap as AWP does
+    # wrap as AWP does and move to device
     model = nn.DataParallel(model).to(device)
 
     model.train()
@@ -185,7 +191,7 @@ def main():
     if args.opt_level == 'O2':
         amp_args['master_weights'] = args.master_weights
     if amp is not None and args.opt_level != 'O0':
-      model, opt = amp.initialize(model, opt, **amp_args)
+        model, opt = amp.initialize(model, opt, **amp_args)
     criterion = nn.CrossEntropyLoss()
 
     # LR scheduler: keep similar logic to earlier scripts (cyclic or multistep fallback)
@@ -228,33 +234,34 @@ def main():
         train_n = 0
 
         for batch_idx, (X, y) in enumerate(train_loader):
+            # move inputs to the correct device
             X = X.to(device)
             y = y.to(device)
 
-            # initialize adversarial delta
-            delta = torch.zeros_like(X).to(device)
+            # initialize adversarial delta on same device as X
+            delta = torch.zeros_like(X).to(X.device)
             if args.delta_init == 'random':
                 # epsilon is per-channel tensor; uniform in [-eps, eps] per channel
                 for c in range(len(epsilon)):
                     delta[:, c, :, :].uniform_(-epsilon[c][0][0].item(), epsilon[c][0][0].item())
-                delta.data = clamp(delta, lower_limit - X, upper_limit - X)
+                delta.data = clamp(delta, (_scalar_on_device(lower_limit, X) - X), (_scalar_on_device(upper_limit, X) - X))
             delta.requires_grad = True
 
             # perform PGD (training iterations)
-            iters_train = args.attack_iters_train if hasattr(args, 'attack_iters_train') else args.attack_iters_train if hasattr(args, 'attack_iters_train') else args.attack_iters_train
+            iters_train = args.attack_iters_train
             for _ in range(iters_train):
                 # forward through model with normalization (matches AWP)
                 adv_in = normalize(torch.clamp(X + delta, min=lower_limit, max=upper_limit))
                 output = model(adv_in)
                 loss = criterion(output, y)
                 if amp is not None and args.opt_level != 'O0':
-                  with amp.scale_loss(loss, opt) as scaled_loss:
-                      scaled_loss.backward()
+                    with amp.scale_loss(loss, opt) as scaled_loss:
+                        scaled_loss.backward()
                 else:
                     loss.backward()
                 grad = delta.grad.detach()
                 delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
-                delta.data = clamp(delta, lower_limit - X, upper_limit - X)
+                delta.data = clamp(delta, (_scalar_on_device(lower_limit, X) - X), (_scalar_on_device(upper_limit, X) - X))
                 delta.grad.zero_()
 
             # finalize delta and train on adversarial example
@@ -264,8 +271,8 @@ def main():
             loss = criterion(output, y)
             opt.zero_grad()
             if amp is not None and args.opt_level != 'O0':
-              with amp.scale_loss(loss, opt) as scaled_loss:
-                  scaled_loss.backward()
+                with amp.scale_loss(loss, opt) as scaled_loss:
+                    scaled_loss.backward()
             else:
                 loss.backward()
             opt.step()
@@ -303,12 +310,10 @@ def main():
 
         # Evaluation (test with stronger PGD)
         model.eval()
-        # build a fresh copy for evaluate_pgd if that function expects model in eval mode without DataParallel specifics:
-        # but evaluate_pgd should accept the DataParallel model directly as AWP does.
         test_model = model
 
         # evaluate robustly (evaluate_pgd signature: loader, model, iters, restarts)
-        iters_test = args.attack_iters_test if hasattr(args, 'attack_iters_test') else args.attack_iters_test if hasattr(args, 'attack_iters_test') else args.attack_iters_test
+        iters_test = args.attack_iters_test
         pgd_loss, pgd_acc = evaluate_pgd(test_loader, test_model, iters_test, args.restarts)
         test_loss, test_acc = evaluate_standard(test_loader, test_model)
 
