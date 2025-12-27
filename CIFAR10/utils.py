@@ -161,50 +161,42 @@ def attack_pgd(model, X, y, epsilon, alpha, attack_iters, restarts, opt=None):
 def evaluate_pgd(test_loader, model, attack_iters, restarts):
     """
     Evaluate robustness with PGD on test_loader.
-    Returns (avg_loss, avg_acc) for robust (PGD) evaluation.
+    Returns (avg_loss, avg_acc, n_samples).
     """
-    # compute epsilon/alpha using CPU std (std is CPU tensor), then move to model device when used
     eps = (8. / 255.)
     a = (2. / 255.)
     pgd_loss = 0.0
     pgd_acc = 0
     n = 0
     model.eval()
-    # infer device from model parameters (works with DataParallel)
     try:
         model_device = next(model.parameters()).device
     except StopIteration:
         model_device = torch.device('cpu')
 
-    # make per-channel epsilon/std tensors on model device
     eps_tensor = (torch.tensor(eps, dtype=torch.float32) / std).to(device=model_device)
     alpha_tensor = (torch.tensor(a, dtype=torch.float32) / std).to(device=model_device)
 
     for X, y in test_loader:
-        # move batch to model device
         X = X.to(model_device)
         y = y.to(model_device)
-
-        # compute adversarial perturbation (requires grad)
+        # compute adversarial perturbation (attack_pgd uses gradients)
         pgd_delta = attack_pgd(model, X, y, eps_tensor, alpha_tensor, attack_iters, restarts)
-
-        # now evaluate robustly without gradients
         with torch.no_grad():
-            output = model(normalize(torch.clamp(X + pgd_delta, min=lower_limit.to(model_device), max=upper_limit.to(model_device))))
-            loss = F.cross_entropy(output, y)
+            out = model(normalize(torch.clamp(X + pgd_delta, min=lower_limit.to(model_device), max=upper_limit.to(model_device))))
+            loss = F.cross_entropy(out, y)
             pgd_loss += loss.item() * y.size(0)
-            pgd_acc += (output.max(1)[1] == y).sum().item()
+            pgd_acc += (out.max(1)[1] == y).sum().item()
             n += y.size(0)
 
     if n == 0:
-        return 0.0, 0.0
-    return pgd_loss / n, pgd_acc / n
+        return 0.0, 0.0, 0
+    return pgd_loss / n, pgd_acc / n, n
 
 
 def evaluate_standard(test_loader, model):
     """
-    Standard (clean) evaluation.
-    Returns (avg_loss, avg_acc).
+    Standard (clean) evaluation. Returns (avg_loss, avg_acc, n_samples).
     """
     test_loss = 0.0
     test_acc = 0
@@ -219,12 +211,13 @@ def evaluate_standard(test_loader, model):
         for X, y in test_loader:
             X = X.to(model_device)
             y = y.to(model_device)
-            output = model(normalize(X))
-            loss = F.cross_entropy(output, y)
+            out = model(normalize(X))
+            loss = F.cross_entropy(out, y)
             test_loss += loss.item() * y.size(0)
-            test_acc += (output.max(1)[1] == y).sum().item()
+            test_acc += (out.max(1)[1] == y).sum().item()
             n += y.size(0)
 
     if n == 0:
-        return 0.0, 0.0
-    return test_loss / n, test_acc / n
+        return 0.0, 0.0, 0
+    return test_loss / n, test_acc / n, n
+
