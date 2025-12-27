@@ -212,6 +212,79 @@ def main():
     else:
         scheduler = torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[max(1, lr_steps // 2), max(1, lr_steps * 3 // 4)], gamma=0.1)
 
+    # -------------------------
+    # Resume-from checkpoint (epoch-level)
+    # -------------------------
+    start_epoch = 0
+    if args.resume_from:
+        ckpt_path = args.resume_from
+        if os.path.exists(ckpt_path):
+            logger.info(f"Attempting to resume from checkpoint: {ckpt_path}")
+            try:
+                ckpt = safe_load_checkpoint(ckpt_path, device=device)
+                # load model state (permissive)
+                if 'model_state' in ckpt:
+                    try:
+                        model.load_state_dict(ckpt['model_state'])
+                        logger.info("Model weights loaded from checkpoint.")
+                    except Exception as e:
+                        try:
+                            model.load_state_dict(ckpt['model_state'], strict=False)
+                            logger.warning(f"Model loaded with strict=False: {e}")
+                        except Exception as e2:
+                            logger.warning(f"Failed to load model_state from checkpoint: {e2}")
+
+                # load optimizer if present
+                if 'opt_state' in ckpt:
+                    try:
+                        opt.load_state_dict(ckpt['opt_state'])
+                        logger.info("Optimizer state restored from checkpoint.")
+                    except Exception as e:
+                        logger.warning(f"Could not restore optimizer state: {e}")
+
+                # restore RNGs (best-effort)
+                try:
+                    if 'rng_numpy' in ckpt:
+                        np.random.set_state(ckpt['rng_numpy'])
+                    if 'rng_python' in ckpt:
+                        pyrandom.setstate(ckpt['rng_python'])
+                    if 'rng_torch' in ckpt:
+                        rt = ckpt['rng_torch']
+                        # handle tensor / numpy array or list
+                        if isinstance(rt, torch.Tensor):
+                            torch.set_rng_state(rt)
+                        else:
+                            try:
+                                torch.set_rng_state(torch.tensor(rt, dtype=torch.uint8))
+                            except Exception:
+                                logger.warning("Could not restore CPU RNG from checkpoint (type mismatch).")
+                    if torch.cuda.is_available() and 'rng_cuda_all' in ckpt:
+                        try:
+                            cuda_states = []
+                            for s in ckpt['rng_cuda_all']:
+                                if isinstance(s, torch.Tensor):
+                                    cuda_states.append(s)
+                                else:
+                                    cuda_states.append(torch.tensor(s, dtype=torch.uint8))
+                            torch.cuda.set_rng_state_all(cuda_states)
+                        except Exception:
+                            logger.warning("Could not restore CUDA RNG states from checkpoint.")
+                except Exception as e:
+                    logger.warning(f"RNG restore failed: {e}")
+
+                # restore bookkeeping
+                start_epoch = int(ckpt.get('epoch', 0)) + 1
+                if 'train_subset_indices' in ckpt and ckpt['train_subset_indices'] is not None:
+                    # replace train_subset_indices if checkpoint has it (keeps training subset consistent)
+                    train_subset_indices = ckpt['train_subset_indices']
+                    np.save(os.path.join(args.out_dir, 'train_subset_indices_restored.npy'), train_subset_indices)
+                    logger.info(f"Restored train subset of size {len(train_subset_indices)} from checkpoint")
+                logger.info(f"Resuming training from epoch {start_epoch}")
+            except Exception as e:
+                logger.warning(f"Failed to load checkpoint {ckpt_path}: {e}")
+        else:
+            logger.warning(f"Requested resume-from path does not exist: {ckpt_path}")
+
     # metrics CSV header (match AWP)
     metrics_path = os.path.join(args.out_dir, "metrics.csv")
     if not os.path.exists(metrics_path):
@@ -236,7 +309,7 @@ def main():
     # Training loop
     logger.info('Epoch \t Seconds \t LR \t \t Train Loss \t Train Acc')
     start_train_time = time.time()
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         start_epoch_time = time.time()
         train_loss = 0.0
         train_acc = 0
