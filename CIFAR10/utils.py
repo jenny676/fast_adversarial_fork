@@ -8,26 +8,26 @@ from torchvision import datasets, transforms
 from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
 
-cifar10_mean = (0.4914, 0.4822, 0.4465)
-cifar10_std = (0.2471, 0.2435, 0.2616)
+# --- device-safe CIFAR mean/std helpers (paste this near the top of utils.py) ---
+# keep CPU tensors at import time; move to device/dtype when used
+_cifar10_mean = torch.tensor(cifar10_mean, dtype=torch.float32).view(3, 1, 1)
+_cifar10_std  = torch.tensor(cifar10_std,  dtype=torch.float32).view(3, 1, 1)
 
-mu = torch.tensor(cifar10_mean).view(3,1,1).cuda()
-std = torch.tensor(cifar10_std).view(3,1,1).cuda()
-
-upper_limit = ((1 - mu)/ std)
-lower_limit = ((0 - mu)/ std)
+# expose mu/std names for backward-compatibility (still CPU)
+mu = _cifar10_mean
+std = _cifar10_std
 
 def get_mu(device=None, dtype=None):
     """Return CIFAR mean on requested device/dtype (or cpu if None)."""
     if device is None and dtype is None:
-        return cifar10_mean
-    return cifar10_mean.to(device=device, dtype=dtype)
+        return _cifar10_mean
+    return _cifar10_mean.to(device=device, dtype=dtype)
 
 def get_std(device=None, dtype=None):
     """Return CIFAR std on requested device/dtype (or cpu if None)."""
     if device is None and dtype is None:
-        return cifar10_std
-    return cifar10_std.to(device=device, dtype=dtype)
+        return _cifar10_std
+    return _cifar10_std.to(device=device, dtype=dtype)
 
 def normalize(X):
     """
@@ -37,6 +37,10 @@ def normalize(X):
     mu_t = get_mu(device=X.device, dtype=X.dtype)
     std_t = get_std(device=X.device, dtype=X.dtype)
     return (X - mu_t) / std_t
+# --- end block ---
+
+upper_limit = ((1 - mu)/ std)
+lower_limit = ((0 - mu)/ std)
 
 def clamp(X, lower_limit, upper_limit):
     return torch.max(torch.min(X, upper_limit), lower_limit)
