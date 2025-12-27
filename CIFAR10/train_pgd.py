@@ -29,7 +29,12 @@ logger = logging.getLogger(__name__)
 
 # helper: convert python scalar to tensor on the same device/dtype as ref_tensor
 def _scalar_on_device(scalar, ref_tensor):
-    return torch.tensor(scalar, dtype=ref_tensor.dtype, device=ref_tensor.device)
+    # if scalar is already a tensor, just convert dtype/device without copying raw bytes unnecessarily
+    if torch.is_tensor(scalar):
+        return scalar.to(device=ref_tensor.device, dtype=ref_tensor.dtype)
+    # otherwise create a tensor on the requested device/dtype
+    return torch.tensor(float(scalar), dtype=ref_tensor.dtype, device=ref_tensor.device)
+
 
 # -------------------------
 # Atomic checkpoint helpers (save model+opt+rng+subset indices)
@@ -252,7 +257,7 @@ def main():
             iters_train = args.attack_iters_train
             for _ in range(iters_train):
                 # forward through model with normalization (matches AWP)
-                adv_in = normalize(torch.clamp(X + delta, min=lower_limit, max=upper_limit))
+                adv_in = normalize(torch.clamp(X + delta, min=lower_limit.to(X.device), max=upper_limit.to(X.device)))
                 output = model(adv_in)
                 loss = criterion(output, y)
                 if amp is not None and args.opt_level != 'O0':
@@ -267,7 +272,7 @@ def main():
 
             # finalize delta and train on adversarial example
             delta = delta.detach()
-            adv_in = normalize(torch.clamp(X + delta, min=lower_limit, max=upper_limit))
+            adv_in = normalize(torch.clamp(X + delta, min=lower_limit.to(X.device), max=upper_limit.to(X.device)))
             output = model(adv_in)
             loss = criterion(output, y)
             opt.zero_grad()
