@@ -414,6 +414,17 @@ def main():
                 test_loader, test_model
             )
 
+        # record which PGD was used this epoch (don't change existing metrics file)
+        protocol_path = os.path.join(args.out_dir, 'eval_protocol.log')
+        line = f"epoch={epoch}, mode={'FULL' if is_full_eval else 'QUICK'}, pgd_test_iters={iters_test}, pgd_restarts={args.restarts}, timestamp={time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        
+        # print to console for immediate feedback
+        print("EVAL PROTOCOL:", line.strip())
+        
+        # append to protocol log (creates the file if it doesn't exist)
+        with open(protocol_path, 'a') as pf:
+            pf.write(line)
+
         # compute times
         train_end_time = time.time()
         test_time = time.time()
