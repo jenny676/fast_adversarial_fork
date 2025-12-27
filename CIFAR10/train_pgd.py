@@ -11,7 +11,10 @@ import random as pyrandom
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import apex.amp as amp
+try:
+    import apex.amp as amp
+except ImportError:
+    amp = None
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
 # models
@@ -181,7 +184,8 @@ def main():
     amp_args = dict(opt_level=args.opt_level, loss_scale=args.loss_scale, verbosity=False)
     if args.opt_level == 'O2':
         amp_args['master_weights'] = args.master_weights
-    model, opt = amp.initialize(model, opt, **amp_args)
+    if amp is not None and args.opt_level != 'O0':
+      model, opt = amp.initialize(model, opt, **amp_args)
     criterion = nn.CrossEntropyLoss()
 
     # LR scheduler: keep similar logic to earlier scripts (cyclic or multistep fallback)
@@ -243,8 +247,11 @@ def main():
                 adv_in = normalize(torch.clamp(X + delta, min=lower_limit, max=upper_limit))
                 output = model(adv_in)
                 loss = criterion(output, y)
-                with amp.scale_loss(loss, opt) as scaled_loss:
-                    scaled_loss.backward()
+                if amp is not None and args.opt_level != 'O0':
+                  with amp.scale_loss(loss, opt) as scaled_loss:
+                      scaled_loss.backward()
+                else:
+                    loss.backward()
                 grad = delta.grad.detach()
                 delta.data = clamp(delta + alpha * torch.sign(grad), -epsilon, epsilon)
                 delta.data = clamp(delta, lower_limit - X, upper_limit - X)
@@ -256,8 +263,11 @@ def main():
             output = model(adv_in)
             loss = criterion(output, y)
             opt.zero_grad()
-            with amp.scale_loss(loss, opt) as scaled_loss:
-                scaled_loss.backward()
+            if amp is not None and args.opt_level != 'O0':
+              with amp.scale_loss(loss, opt) as scaled_loss:
+                  scaled_loss.backward()
+            else:
+                loss.backward()
             opt.step()
 
             # track metrics (train_robust tracked same as robust step)
