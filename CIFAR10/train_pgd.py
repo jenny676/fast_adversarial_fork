@@ -132,8 +132,8 @@ def get_args():
 
     return parser.parse_args()
 
-EVAL_EVERY = 5
-QUICK_PGD_ITERS = 3
+EVAL_EVERY = 1
+QUICK_PGD_ITERS = 20
 
 # -------------------------
 # main training
