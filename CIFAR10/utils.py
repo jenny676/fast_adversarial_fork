@@ -17,6 +17,14 @@ std = torch.tensor(cifar10_std).view(3,1,1).cuda()
 upper_limit = ((1 - mu)/ std)
 lower_limit = ((0 - mu)/ std)
 
+def normalize(X):
+    """
+    Normalize tensor X with CIFAR mean/std on the same device and dtype as X.
+    Usage: X_norm = normalize(X)
+    """
+    mu_t = get_mu(device=X.device, dtype=X.dtype)
+    std_t = get_std(device=X.device, dtype=X.dtype)
+    return (X - mu_t) / std_t
 
 def clamp(X, lower_limit, upper_limit):
     return torch.max(torch.min(X, upper_limit), lower_limit)
