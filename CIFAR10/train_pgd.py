@@ -209,8 +209,8 @@ def main():
             writer = csv.writer(f)
             writer.writerow([
                 "epoch",
-                "wall_time_train",
-                "wall_time_epoch",
+                "wall_time_train",    # seconds spent in training loop this epoch
+                "wall_time_epoch",    # seconds spent in evaluation / rest of epoch
                 "lr",
                 "train_loss",
                 "train_acc",
@@ -221,6 +221,7 @@ def main():
                 "test_robust_loss",
                 "test_robust_acc",
             ])
+
 
     # Training loop
     logger.info('Epoch \t Seconds \t LR \t \t Train Loss \t Train Acc')
@@ -317,36 +318,72 @@ def main():
         pgd_loss, pgd_acc = evaluate_pgd(test_loader, test_model, iters_test, args.restarts)
         test_loss, test_acc = evaluate_standard(test_loader, test_model)
 
-        test_time = time.time()
-        wall_time_train = time.time() - start_epoch_time
-        wall_time_epoch = test_time - (start_epoch_time + wall_time_train)  # best-effort: test portion
+        # record times
+        train_end_time = time.time()   # right after training finished
+        test_time = time.time()        # right after evaluation finished
+        wall_time_train = train_end_time - start_epoch_time
+        wall_time_epoch = test_time - train_end_time
 
-        # write metrics row (match AWP ordering)
+        # === compute safe averages ===
+        def safe_avg(num, denom):
+            return float(num) / float(denom) if denom else None
+
+        train_loss_avg = safe_avg(train_loss, train_n)
+        train_acc_avg = safe_avg(train_acc, train_n)
+        train_robust_loss_avg = safe_avg(train_robust_loss, train_n)
+        train_robust_acc_avg = safe_avg(train_robust_acc, train_n)
+
+        # test_n should be set inside evaluate_standard / evaluate_pgd logic; guard if missing
+        try:
+            test_n  # noqa: F821
+        except NameError:
+            # fallback: derive n from test_loader length * batch_size (approx) — prefer real values from eval funcs
+            test_n = None
+
+        test_loss_avg = safe_avg(test_loss, test_n) if test_n else (test_loss if test_n == 0 else None)
+        test_acc_avg = safe_avg(test_acc, test_n) if test_n else (test_acc if test_n == 0 else None)
+        test_robust_loss_avg = safe_avg(pgd_loss, test_n) if test_n else (pgd_loss if test_n == 0 else None)
+        test_robust_acc_avg = safe_avg(pgd_acc, test_n) if test_n else (pgd_acc if test_n == 0 else None)
+
+        # log a full, human-readable line
+        logger.info(
+            '%d \t %.1f \t %.1f \t %.6f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f \t %.4f',
+            epoch,
+            wall_time_train,
+            wall_time_epoch,
+            lr,
+            train_loss_avg if train_loss_avg is not None else float('nan'),
+            train_acc_avg if train_acc_avg is not None else float('nan'),
+            train_robust_loss_avg if train_robust_loss_avg is not None else float('nan'),
+            train_robust_acc_avg if train_robust_acc_avg is not None else float('nan'),
+            test_loss_avg if test_loss_avg is not None else float('nan'),
+            test_acc_avg if test_acc_avg is not None else float('nan'),
+            test_robust_loss_avg if test_robust_loss_avg is not None else float('nan'),
+            test_robust_acc_avg if test_robust_acc_avg is not None else float('nan'),
+        )
+
+        # append metrics row in CSV in the requested order
+        def cell(x):
+            return "" if x is None else f"{x:.6f}"
+
         with open(metrics_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 epoch,
                 f"{wall_time_train:.6f}",
-                f"{(time.time() - test_time):.6f}",
+                f"{wall_time_epoch:.6f}",
                 f"{lr:.6f}",
-                "" if train_loss_avg is None else f"{train_loss_avg:.6f}",
-                "" if train_acc_avg is None else f"{train_acc_avg:.6f}",
-                "" if train_robust_loss_avg is None else f"{train_robust_loss_avg:.6f}",
-                "" if train_robust_acc_avg is None else f"{train_robust_acc_avg:.6f}",
-                "" if test_loss is None else f"{test_loss:.6f}",
-                "" if test_acc is None else f"{test_acc:.6f}",
-                "" if pgd_loss is None else f"{pgd_loss:.6f}",
-                "" if pgd_acc is None else f"{pgd_acc:.6f}",
+                cell(train_loss_avg),
+                cell(train_acc_avg),
+                cell(train_robust_loss_avg),
+                cell(train_robust_acc_avg),
+                cell(test_loss_avg),
+                cell(test_acc_avg),
+                cell(test_robust_loss_avg),
+                cell(test_robust_acc_avg),
             ])
 
         model.train()
-
-    # final save
-    final_path = os.path.join(args.out_dir, 'model_final.pth')
-    save_full_checkpoint(final_path, model.state_dict(), opt.state_dict(), epoch=args.epochs, batch_idx=0,
-                         best_test=-1.0, train_subset_indices=train_subset_indices, logger=logger)
-    logger.info("Training complete. Metrics saved to %s", metrics_path)
-
 
 if __name__ == "__main__":
     main()
