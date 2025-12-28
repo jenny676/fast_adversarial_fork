@@ -462,28 +462,39 @@ def main():
         # -------------------------
         model.eval()
         test_model = model
-        
+
         # start timing for test portion
         test_start_time = time.time()
-        
+
+        # safe defaults
+        pgd_loss = pgd_acc = pgd_n = None
+        test_loss = test_acc = test_n = None
+
         # run robust (PGD) eval with gradients enabled (PGD needs grads w.r.t. inputs)
-        with torch.enable_grad():
-            pgd_loss, pgd_acc, pgd_n = evaluate_pgd(
-                test_loader, test_model, iters_test, args.restarts
-            )
-        
+        try:
+            with torch.enable_grad():
+                pgd_loss, pgd_acc, pgd_n = evaluate_pgd(
+                    test_loader, test_model, args.attack_iters_test, args.restarts
+                )
+        except Exception as e:
+            logger.warning(f"Robust evaluation failed at epoch {epoch}: {e}")
+            # keep pgd_* as None so later code will write empty cells or NaN
+
         # run clean evaluation without grads
-        with torch.no_grad():
-            test_loss, test_acc, test_n = evaluate_standard(
-                test_loader, test_model
-            )
-        
+        try:
+            with torch.no_grad():
+                test_loss, test_acc, test_n = evaluate_standard(
+                    test_loader, test_model
+                )
+        except Exception as e:
+            logger.warning(f"Standard evaluation failed at epoch {epoch}: {e}")
+            # keep test_* as None
+
         # compute times
         train_end_time = test_start_time
         test_time = time.time()
         wall_time_train = train_end_time - start_epoch_time
         wall_time_epoch = test_time - test_start_time
-
 
         # safe average helpers
         def safe_avg(val, n):
