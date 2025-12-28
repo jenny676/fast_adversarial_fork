@@ -132,9 +132,6 @@ def get_args():
 
     return parser.parse_args()
 
-EVAL_EVERY = 1
-QUICK_PGD_ITERS = 20
-
 # -------------------------
 # main training
 # -------------------------
@@ -466,10 +463,6 @@ def main():
         model.eval()
         test_model = model
         
-        # decide whether this epoch gets a full expensive eval
-        is_full_eval = (epoch % EVAL_EVERY == 0) or (epoch == args.epochs - 1)
-        iters_test = args.attack_iters_test if is_full_eval else QUICK_PGD_ITERS
-        
         # start timing for test portion
         test_start_time = time.time()
         
@@ -484,17 +477,6 @@ def main():
             test_loss, test_acc, test_n = evaluate_standard(
                 test_loader, test_model
             )
-        
-        # record which PGD was used this epoch (don't change existing metrics file)
-        protocol_path = os.path.join(args.out_dir, 'eval_protocol.log')
-        line = f"epoch={epoch}, mode={'FULL' if is_full_eval else 'QUICK'}, pgd_test_iters={iters_test}, pgd_restarts={args.restarts}, timestamp={time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        
-        # print to console for immediate feedback
-        print("EVAL PROTOCOL:", line.strip())
-        
-        # append to protocol log (creates the file if it doesn't exist)
-        with open(protocol_path, 'a') as pf:
-            pf.write(line)
         
         # compute times
         train_end_time = test_start_time
