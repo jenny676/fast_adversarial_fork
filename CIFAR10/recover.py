@@ -152,14 +152,22 @@ def main():
         # load model
         model = create_model(args.model, device)
         try:
-            ckpt = torch.load(ckpt_path, map_location=device)
+            import numpy as _np
+            from torch.serialization import safe_globals
+
+            # allowlist numpy scalar used in some checkpoints AND allow full load
+            try:
+                with safe_globals([_np.core.multiarray.scalar]):
+                    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            except Exception as inner_e:
+                # fallback: try legacy explicit weights_only=False (less restrictive)
+                print(f"[WARN] safe_globals approach failed: {inner_e}; trying torch.load(..., weights_only=False)")
+                ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+
         except Exception as e:
             print(f"[ERROR] Failed to load checkpoint {ckpt_path}: {e}")
             continue
 
-        if "model_state" not in ckpt:
-            print(f"[WARN] checkpoint {ckpt_path} has no model_state; skipping.")
-            continue
 
         try:
             model.load_state_dict(ckpt["model_state"])
