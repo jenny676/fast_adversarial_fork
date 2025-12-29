@@ -487,6 +487,7 @@ def main():
 
         # save per-epoch full checkpoint (atomic)
         ckpt_path = os.path.join(args.out_dir, f'checkpoint_epoch_{epoch}.pth')
+        assert not os.path.exists(ckpt_path), f"Refusing to overwrite existing checkpoint: {ckpt_path}"
         save_full_checkpoint(ckpt_path,
                              model.state_dict(),
                              opt.state_dict(),
