@@ -5,6 +5,7 @@ import os
 import time
 import csv
 from pathlib import Path
+import shutil
 
 import numpy as np
 import random as pyrandom
@@ -39,13 +40,14 @@ def _scalar_on_device(scalar, ref_tensor):
 # -------------------------
 # Atomic checkpoint helpers (save model+opt+rng+subset indices)
 # -------------------------
-def save_full_checkpoint(path, model_state, opt_state, epoch=0, batch_idx=0,
+def save_full_checkpoint(path, model_state, opt_state, scheduler_state=None, epoch=0, batch_idx=0,
                          best_test=-1.0, train_subset_indices=None, logger=None, extra=None):
     state = {
         'epoch': int(epoch),
         'batch_idx': int(batch_idx),
         'model_state': model_state,
         'opt_state': opt_state,
+        'scheduler_state': None if scheduler_state is None else scheduler_state,
         'best_test_robust_acc': best_test,
         'train_subset_indices': None if train_subset_indices is None else list(train_subset_indices),
         'rng_numpy': np.random.get_state(),
@@ -339,6 +341,15 @@ def main():
 
                 # restore bookkeeping
                 start_epoch = int(ckpt.get('epoch', 0)) + 1
+
+                # restore scheduler state if present in checkpoint
+                if 'scheduler_state' in ckpt and ckpt['scheduler_state'] is not None:
+                    try:
+                        scheduler.load_state_dict(ckpt['scheduler_state'])
+                        logger.info("Scheduler state restored from checkpoint.")
+                    except Exception as e:
+                        logger.warning(f"Could not restore scheduler state: {e}")
+
                 if 'train_subset_indices' in ckpt and ckpt['train_subset_indices'] is not None:
                     # replace train_subset_indices if checkpoint has it (keeps training subset consistent)
                     train_subset_indices = ckpt['train_subset_indices']
@@ -352,6 +363,29 @@ def main():
 
     # metrics CSV header (match AWP)
     metrics_path = os.path.join(args.out_dir, "metrics.csv")
+
+    # If resuming, prune any existing metrics rows with epoch >= start_epoch to avoid duplication
+    # (start_epoch is 0 when not resuming)
+    if os.path.exists(metrics_path) and start_epoch > 0:
+        tmpf = metrics_path + '.tmp'
+        with open(metrics_path, 'r', newline='') as r, open(tmpf, 'w', newline='') as w:
+            reader = csv.reader(r)
+            writer = csv.writer(w)
+            header = next(reader, None)
+            if header:
+                writer.writerow(header)
+            for row in reader:
+                try:
+                    row_epoch = int(row[0])
+                except Exception:
+                    # preserve non-standard rows
+                    writer.writerow(row)
+                    continue
+                if row_epoch < start_epoch:
+                    writer.writerow(row)
+        shutil.move(tmpf, metrics_path)
+        logger.info(f"Trimmed existing metrics.csv to epochs < {start_epoch}")
+
     if not os.path.exists(metrics_path):
         with open(metrics_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -453,9 +487,15 @@ def main():
 
         # save per-epoch full checkpoint (atomic)
         ckpt_path = os.path.join(args.out_dir, f'checkpoint_epoch_{epoch}.pth')
-        save_full_checkpoint(ckpt_path, model.state_dict(), opt.state_dict(),
-                             epoch=epoch, batch_idx=0,
-                             best_test=-1.0, train_subset_indices=train_subset_indices, logger=logger)
+        save_full_checkpoint(ckpt_path,
+                             model.state_dict(),
+                             opt.state_dict(),
+                             scheduler_state=scheduler.state_dict(),
+                             epoch=epoch,
+                             batch_idx=0,
+                             best_test=-1.0,
+                             train_subset_indices=train_subset_indices,
+                             logger=logger)
 
         # -------------------------
         # Evaluation (test with stronger PGD)
