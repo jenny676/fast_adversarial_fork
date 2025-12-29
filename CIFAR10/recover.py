@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import csv
 import os
@@ -87,13 +88,13 @@ def main():
     args = parse_args()
     out_dir = args.out_dir
     metrics_csv = os.path.join(out_dir, "metrics.csv")
-    recovered_temp_csv = os.path.join(out_dir, "recovered_rows.csv")
+    recovered_temp_csv = os.path.join(out_dir, "recovered_rows.csv")  # NEW: incremental file
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # get checkpoint map
     ckpt_map = find_checkpoints(out_dir)
     if not ckpt_map:
-        print(f"[ERROR] No checkpoints found in {out_dir}. Exiting.")
+        print(f"[ERROR] No checkpoints found in {out_dir}. Exiting.", flush=True)
         return
 
     # determine epochs to process
@@ -128,7 +129,7 @@ def main():
     # backup original metrics.csv
     if os.path.exists(metrics_csv):
         bak = backup_file(metrics_csv)
-        print(f"[INFO] Backed up original metrics.csv to {bak}")
+        print(f"[INFO] Backed up original metrics.csv to {bak}", flush=True)
 
     # build loaders (we need the full train dataset to build subset loader)
     train_loader_full, test_loader = get_loaders(args.data_dir, args.batch_size)
@@ -136,18 +137,25 @@ def main():
 
     recovered_rows = {}  # epoch -> dict(row)
 
+    # --- NEW: create recovered_rows.csv header if not exists (WRITE IMMEDIATELY) ---
+    if not os.path.exists(recovered_temp_csv):
+        with open(recovered_temp_csv, "w", newline="") as rf:
+            writer = csv.DictWriter(rf, fieldnames=header)
+            writer.writeheader()
+        print(f"[INFO] Created incremental recovered rows file: {recovered_temp_csv}", flush=True)
+
     # iterate epochs
     for epoch in epochs_to_try:
         if (not args.overwrite) and (epoch in existing_rows):
-            print(f"[SKIP] Epoch {epoch} already present in metrics.csv (use --overwrite to replace).")
+            print(f"[SKIP] Epoch {epoch} already present in metrics.csv (use --overwrite to replace).", flush=True)
             continue
 
         ckpt_path = ckpt_map.get(epoch, None)
         if ckpt_path is None or not os.path.exists(ckpt_path):
-            print(f"[WARN] No checkpoint file found for epoch {epoch}; skipping.")
+            print(f"[WARN] No checkpoint file found for epoch {epoch}; skipping.", flush=True)
             continue
 
-        print(f"[INFO] Recovering epoch {epoch} from {ckpt_path} ...")
+        print(f"[INFO] Recovering epoch {epoch} from {ckpt_path} ...", flush=True)
 
         # load model
         model = create_model(args.model, device)
@@ -161,22 +169,22 @@ def main():
                     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
             except Exception as inner_e:
                 # fallback: try legacy explicit weights_only=False (less restrictive)
-                print(f"[WARN] safe_globals approach failed: {inner_e}; trying torch.load(..., weights_only=False)")
+                print(f"[WARN] safe_globals approach failed: {inner_e}; trying torch.load(..., weights_only=False)", flush=True)
                 ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
 
         except Exception as e:
-            print(f"[ERROR] Failed to load checkpoint {ckpt_path}: {e}")
+            print(f"[ERROR] Failed to load checkpoint {ckpt_path}: {e}", flush=True)
             continue
 
 
         try:
             model.load_state_dict(ckpt["model_state"])
         except Exception as e:
-            print(f"[WARN] model.load_state_dict() raised: {e} — attempting strict=False")
+            print(f"[WARN] model.load_state_dict() raised: {e} — attempting strict=False", flush=True)
             try:
                 model.load_state_dict(ckpt["model_state"], strict=False)
             except Exception as e2:
-                print(f"[ERROR] Fallback load also failed: {e2}; skipping epoch {epoch}")
+                print(f"[ERROR] Fallback load also failed: {e2}; skipping epoch {epoch}", flush=True)
                 continue
 
         model.eval()
@@ -191,12 +199,12 @@ def main():
                     opt.load_state_dict(ckpt["opt_state"])
                     recovered_lr = opt.param_groups[0].get("lr", "")
                 except Exception as e:
-                    print(f"[WARN] Could not load optimizer state to recover lr: {e}")
+                    print(f"[WARN] Could not load optimizer state to recover lr: {e}", flush=True)
                     recovered_lr = ""
             else:
                 recovered_lr = ""
         except Exception as e:
-            print(f"[WARN] lr recovery failed: {e}")
+            print(f"[WARN] lr recovery failed: {e}", flush=True)
             recovered_lr = ""
 
         # Recover test metrics (robust + clean)
@@ -207,7 +215,7 @@ def main():
                 test_robust_loss = pgd_loss
                 test_robust_acc = pgd_acc
         except Exception as e:
-            print(f"[WARN] evaluate_pgd(test) failed for epoch {epoch}: {e}")
+            print(f"[WARN] evaluate_pgd(test) failed for epoch {epoch}: {e}", flush=True)
             test_robust_loss = test_robust_acc = None
 
         try:
@@ -216,7 +224,7 @@ def main():
                 test_loss = t_loss
                 test_acc = t_acc
         except Exception as e:
-            print(f"[WARN] evaluate_standard(test) failed for epoch {epoch}: {e}")
+            print(f"[WARN] evaluate_standard(test) failed for epoch {epoch}: {e}", flush=True)
             test_loss = test_acc = None
 
         # Optionally recover train metrics using train_subset_indices
@@ -224,7 +232,7 @@ def main():
         if args.recover_train_metrics:
             subset_indices = ckpt.get("train_subset_indices", None)
             if subset_indices is None:
-                print(f"[INFO] No train_subset_indices present in checkpoint for epoch {epoch}; skipping train-metrics recovery.")
+                print(f"[INFO] No train_subset_indices present in checkpoint for epoch {epoch}; skipping train-metrics recovery.", flush=True)
             else:
                 # build loader for subset (Sampler)
                 sampler = SubsetRandomSampler(list(subset_indices))
@@ -234,7 +242,7 @@ def main():
                 # If user requested train-mode evaluation, toggle model.train()
                 eval_mode = True
                 if args.use_train_mode:
-                    print("[WARN] Evaluating train-subset in model.train() mode (results may differ and be non-deterministic).")
+                    print("[WARN] Evaluating train-subset in model.train() mode (results may differ and be non-deterministic).", flush=True)
                     model.train()
                     eval_mode = False
                 else:
@@ -248,7 +256,7 @@ def main():
                         train_robust_loss = tr_pgd_loss
                         train_robust_acc = tr_pgd_acc
                 except Exception as e:
-                    print(f"[WARN] evaluate_pgd(train-subset) failed for epoch {epoch}: {e}")
+                    print(f"[WARN] evaluate_pgd(train-subset) failed for epoch {epoch}: {e}", flush=True)
                     train_robust_loss = train_robust_acc = None
 
                 # clean on train subset
@@ -258,7 +266,7 @@ def main():
                         train_loss = tr_loss
                         train_acc = tr_acc
                 except Exception as e:
-                    print(f"[WARN] evaluate_standard(train-subset) failed for epoch {epoch}: {e}")
+                    print(f"[WARN] evaluate_standard(train-subset) failed for epoch {epoch}: {e}", flush=True)
                     train_loss = train_acc = None
 
                 # restore eval train state
@@ -289,34 +297,51 @@ def main():
             normalized_row[h] = row.get(h, "")
 
         recovered_rows[epoch] = normalized_row
-        print(f"[OK] Recovered epoch {epoch}: test_acc={test_acc}, test_robust_acc={test_robust_acc}, train_robust_acc={train_robust_acc}")
+        print(f"[OK] Recovered epoch {epoch}: test_acc={test_acc}, test_robust_acc={test_robust_acc}, train_robust_acc={train_robust_acc}", flush=True)
+
+        # --- NEW: append this recovered row immediately to the incremental CSV ---
+        try:
+            with open(recovered_temp_csv, "a", newline="") as rf:
+                writer = csv.DictWriter(rf, fieldnames=header)
+                writer.writerow(normalized_row)
+                rf.flush()
+            print(f"[INFO] Appended recovered epoch {epoch} to {recovered_temp_csv}", flush=True)
+        except Exception as e:
+            print(f"[WARN] Failed to append to {recovered_temp_csv}: {e}", flush=True)
+
+    # <-- for-loop ends here -->
 
     # Merge recovered rows into existing_rows (without overwriting unless --overwrite)
     merged = dict(existing_rows)  # copy
     for e, r in recovered_rows.items():
         if (e in merged) and (not args.overwrite):
-            print(f"[SKIP-MERGE] Existing row for epoch {e} preserved (use --overwrite to replace).")
+            print(f"[SKIP-MERGE] Existing row for epoch {e} preserved (use --overwrite to replace).", flush=True)
             continue
         merged[e] = r
 
-    if not merged:
-        print("[INFO] No rows to write to metrics.csv. Exiting.")
+    # If nothing changed (merged equals existing_rows and no recovered rows), exit
+    if len(merged) == 0:
+        print("[INFO] No rows to write to metrics.csv. Exiting.", flush=True)
         return
 
     # write merged CSV to temp file then replace original
     tmp_out = os.path.join(out_dir, f"metrics_merged_{int(time.time())}.csv")
-    with open(tmp_out, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=header)
-        writer.writeheader()
-        for epoch in sorted(merged.keys()):
-            row = merged[epoch]
-            # ensure every header present
-            write_row = {h: row.get(h, "") for h in header}
-            writer.writerow(write_row)
+    try:
+        with open(tmp_out, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            writer.writeheader()
+            for epoch in sorted(merged.keys()):
+                row = merged[epoch]
+                # ensure every header present
+                write_row = {h: row.get(h, "") for h in header}
+                writer.writerow(write_row)
 
-    # overwrite metrics.csv (we already backed up)
-    Path(tmp_out).replace(metrics_csv)
-    print(f"[DONE] Wrote merged metrics to {metrics_csv} (backup created earlier).")
+        # overwrite metrics.csv (we already backed up)
+        Path(tmp_out).replace(metrics_csv)
+        print(f"[DONE] Wrote merged metrics to {metrics_csv} (backup created earlier).", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to write/replace metrics.csv: {e}", flush=True)
+        print(f"[INFO] Merged CSV left at {tmp_out} (inspect manually).", flush=True)
 
 if __name__ == "__main__":
     main()
