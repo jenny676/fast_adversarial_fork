@@ -207,7 +207,10 @@ for name, ckpt_path in CHECKPOINTS.items():
     # restore model weights (not strictly necessary since we reload per-loop)
     set_param_vector(model, base_vec)
 
-    results[name] = Z
+    center_idx = NUM_POINTS // 2
+    Z_center = Z[center_idx, center_idx]
+    Z_norm = Z - Z_center
+    results[name] = Z_norm
     # compute simple scalar summaries for caption/table
     center_idx = NUM_POINTS // 2
     Zc = float(Z[center_idx, center_idx])
