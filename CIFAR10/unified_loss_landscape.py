@@ -17,6 +17,9 @@ CHECKPOINTS = {
 FIXED_BATCH_PATH = "/mnt/data/fixed_batch.pt"
 OUT_SAVE = "/content/drive/MyDrive/TDL/plots/landscape_comparison.png"
 
+SAVE_DIR = "/content/drive/MyDrive/TDL/landscape_arrays"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
 NUM_POINTS = 21         # grid resolution per axis (reduce to 11 for speed)
 ALPHA_RANGE = 0.05      # ± fraction of weight norm for directions
 PGD_STEPS = 10
@@ -219,32 +222,22 @@ for name, ckpt_path in CHECKPOINTS.items():
     stats[name] = {"center": Zc, "max_inc": max_inc, "mean_inc": mean_inc}
     print(f"{name} stats: center={Zc:.4f}, max_inc={max_inc:.6f}, mean_inc={mean_inc:.6f}")
 
-# ---------------- Plot side-by-side with shared color scale ----------------
-# compute global vmin/vmax
-vmin = min(float(Z.min()) for Z in results.values())
-vmax = max(float(Z.max()) for Z in results.values())
-print("Global vmin,vmax:", vmin, vmax)
+# ---------------- Save results (NO plotting) ----------------
+save_payload = {
+    "alphas": alphas,
+    "betas": betas,
+    "stats": stats,
+}
 
-num_plots = len(results)
-fig, axes = plt.subplots(1, num_plots, figsize=(6 * num_plots, 5))
-if num_plots == 1:
-    axes = [axes]
-for ax, (name, Z) in zip(axes, results.items()):
-    cf = ax.contourf(X, Y, Z, levels=50, vmin=vmin, vmax=vmax)
-    ax.set_title(name, fontsize=14)
-    ax.set_xlabel("alpha (direction 1 scale)")
-    ax.set_ylabel("beta (direction 2 scale)")
-    # mark center
-    ax.scatter([0.0], [0.0], color="k", s=10)
-fig.colorbar(cf, ax=axes, fraction=0.02, pad=0.04)
-plt.suptitle("Robust loss landscapes (same color scale)")
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-os.makedirs(os.path.dirname(OUT_SAVE), exist_ok=True)
-plt.savefig(OUT_SAVE, dpi=200, bbox_inches="tight")
-plt.show()
-print("Saved comparison to:", OUT_SAVE)
+for name, Z_norm in results.items():
+    np.save(os.path.join(SAVE_DIR, f"{name}_Z_norm.npy"), Z_norm)
+    print(f"Saved {name}_Z_norm.npy")
 
-# print the scalar stats for quick copy-paste to paper
-print("\nScalar summaries (center loss, max_increase, mean_increase):")
-for name, s in stats.items():
-    print(f"{name}: center={s['center']:.4f}, max_inc={s['max_inc']:.6f}, mean_inc={s['mean_inc']:.6f}")
+# also save raw Z if you want (optional but recommended)
+# (you can easily add this by storing raw Z before normalization)
+np.savez(
+    os.path.join(SAVE_DIR, "landscape_metadata.npz"),
+    **save_payload
+)
+
+print("Saved all landscape arrays and metadata to:", SAVE_DIR)
